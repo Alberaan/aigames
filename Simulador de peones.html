@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Simulador de peones</title>
+<style>
+:root{--bg:#f4f4f6;--pn:#fff;--tx:#1b1b1f;--mu:#62626b;--bd:#d6d6dc;--ac:#3b6cf0;--in:#f0f0f4;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121216;--pn:#1b1b21;--tx:#ececf1;--mu:#9a9aa6;--bd:#34343d;--ac:#7c9bff;--in:#26262e;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#121216;--pn:#1b1b21;--tx:#ececf1;--mu:#9a9aa6;--bd:#34343d;--ac:#7c9bff;--in:#26262e;color-scheme:dark}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--tx);font:13px system-ui,sans-serif}
+#app{display:flex;height:100%}
+#cv{flex:1;min-width:0;position:relative;background:#16161c}
+#cv canvas{display:block;width:100%;height:100%;touch-action:none}
+#hud{position:absolute;left:8px;top:8px;color:#e4e5ee;font-size:12px;pointer-events:none;background:rgba(0,0,0,.55);padding:6px 9px;border-radius:7px;line-height:1.55}
+.fx{position:absolute;font-size:26px;pointer-events:none;transform:translate(-50%,-50%);text-shadow:0 1px 3px #000}
+.bar{grid-column:1/-1;position:relative;display:flex;height:20px;margin:4px 5px 2px;touch-action:none}
+.bar i{display:block;height:100%}
+.bar i:first-child{border-radius:5px 0 0 5px}.bar i:nth-child(3){border-radius:0 5px 5px 0}
+.bar .h{position:absolute;top:-4px;width:10px;margin-left:-5px;height:28px;background:#fff;border:2px solid #333;border-radius:4px;box-sizing:border-box;cursor:ew-resize}
+.vals{grid-column:1/-1;font-size:12px;color:var(--mu);text-align:center}
+#tip{position:absolute;display:none;pointer-events:none;background:rgba(0,0,0,.82);color:#fff;padding:3px 7px;border-radius:5px;font-size:12px;white-space:nowrap}
+#panel{width:300px;overflow:auto;background:var(--pn);border-left:1px solid var(--bd);padding:10px;box-sizing:border-box}
+h3{margin:12px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--mu)}
+button,input{font:inherit;color:var(--tx);background:var(--in);border:1px solid var(--bd);border-radius:6px;padding:4px 7px}
+button{cursor:pointer}button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+input[type=number]{width:52px}input[type=range]{width:100%;padding:0}
+input[type=color]{width:28px;height:24px;padding:0}
+.row{display:flex;gap:6px;align-items:center;margin:4px 0;flex-wrap:wrap}
+.tp{display:grid;grid-template-columns:auto auto 1fr;gap:4px 6px;align-items:center;padding:5px 0;border-bottom:1px solid var(--bd)}
+.tp .pr{grid-column:1/-1;display:flex;gap:4px;align-items:center;color:var(--mu);font-size:11px}
+.tp .pr input{width:44px}
+@media (max-width:700px){#app{flex-direction:column}#panel{width:auto;height:48%;border-left:0;border-top:1px solid var(--bd)}}
+</style></head><body>
+<div id="app">
+<div id="cv"><div id="hud"></div><div id="tip"></div></div>
+<div id="panel">
+<div class="row"><button id="play">▶ Play</button><button id="step">Paso</button><button id="clear">Vaciar</button></div>
+<h3>Velocidad del tick: <span id="msv"></span> ms</h3>
+<input type="range" id="ms" min="40" max="2000" step="10" value="500">
+<h3>Tablero</h3>
+<div class="row">Ancho <input type="number" id="W" min="2" max="40" value="12"> Profundidad <input type="number" id="D" min="2" max="40" value="12"></div>
+<h3>Parámetros</h3>
+<div class="row" style="color:var(--mu)">Daño de ataque = vida del atacante</div>
+<label class="row"><input type="checkbox" id="ff" checked> Fuego amigo (mismo color se hace daño)</label>
+<div class="row">Beneficio cooperar <input type="number" id="gain" value="2" min="0" step="0.5"></div>
+<div class="row">Vida inicial <input type="number" id="hp0" value="10" min="1"> Vida máx. <input type="number" id="hpMax" value="20" min="1"></div>
+<h3>Tipos · clic en el tablero para colocar</h3>
+<div id="types"></div>
+<div class="row"><button id="erase">Borrar peón</button></div>
+<div class="row">Añadir <input type="number" id="nrand" value="20" min="1"> aleatorios <button id="rand">Poblar</button></div>
+</div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const P={gain:2,hp0:10,hpMax:20,ff:true};
+const types=[{n:'Rojo',c:'#e5484d',p:[.34,.33,.33]},{n:'Azul',c:'#3b82f6',p:[.34,.33,.33]},{n:'Verde',c:'#30a46c',p:[.34,.33,.33]},{n:'Amarillo',c:'#f5c542',p:[.34,.33,.33]}];
+let W=12,D=12,pawns=[],tool=0,running=false,tickN=0,last=0;
+const rnd=n=>Math.floor(Math.random()*n);
+const inb=(x,z)=>x>=0&&z>=0&&x<W&&z<D;
+
+// ---- 3D ----
+const cv=$('cv');
+const renderer=new THREE.WebGLRenderer({antialias:true});
+cv.appendChild(renderer.domElement);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x16161c);
+const cam=new THREE.PerspectiveCamera(50,1,.1,300);
+scene.add(new THREE.AmbientLight(0xffffff,.55));
+const dl=new THREE.DirectionalLight(0xffffff,.8);dl.position.set(8,14,6);scene.add(dl);
+let th=.7,ph=1,rad=20;
+function setCam(){cam.position.set(rad*Math.sin(ph)*Math.sin(th),rad*Math.cos(ph),rad*Math.sin(ph)*Math.cos(th));cam.lookAt(0,0,0)}
+function resize(){const w=cv.clientWidth,h=cv.clientHeight;renderer.setSize(w,h,false);cam.aspect=w/h;cam.updateProjectionMatrix()}
+new ResizeObserver(resize).observe(cv);
+
+let board=null,ground=null;
+function buildBoard(){
+  if(board)scene.remove(board);
+  board=new THREE.Group();
+  ground=new THREE.Mesh(new THREE.PlaneGeometry(W,D),new THREE.MeshStandardMaterial({color:0x2a2c36}));
+  ground.rotation.x=-Math.PI/2;board.add(ground);
+  const v=[];
+  for(let i=0;i<=W;i++)v.push(i-W/2,.01,-D/2,i-W/2,.01,D/2);
+  for(let j=0;j<=D;j++)v.push(-W/2,.01,j-D/2,W/2,.01,j-D/2);
+  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(v,3));
+  board.add(new THREE.LineSegments(g,new THREE.LineBasicMaterial({color:0x555868})));
+  scene.add(board);
+}
+const prof=[[0,0],[.32,0],[.32,.06],[.2,.12],[.12,.4],[.2,.46],[.1,.52],[.1,.56]].map(a=>new THREE.Vector2(a[0],a[1]));
+const bodyGeo=new THREE.LatheGeometry(prof,20),headGeo=new THREE.SphereGeometry(.17,16,12);
+types.forEach(t=>t.mat=new THREE.MeshStandardMaterial({color:t.c,roughness:.5}));
+function mk(t,x,z,hp){
+  const g=new THREE.Group(),m=types[t].mat;
+  g.add(new THREE.Mesh(bodyGeo,m));
+  const h=new THREE.Mesh(headGeo,m);h.position.y=.7;g.add(h);
+  const p={t,x,z,hp:hp??P.hp0,g,tx:0,tz:0};g.userData.p=p;
+  g.position.set(x-W/2+.5,0,z-D/2+.5);scene.add(g);pawns.push(p);return p;
+}
+function layout(snap){
+  const m=new Map();
+  pawns.forEach(p=>{const k=p.z*W+p.x;(m.get(k)||m.set(k,[]).get(k)).push(p)});
+  m.forEach(l=>l.forEach((p,i)=>{p.tx=p.x-W/2+.5+(l.length>1?(i?.2:-.2):0);p.tz=p.z-D/2+.5;if(snap)p.g.position.set(p.tx,0,p.tz)}));
+  pawns.forEach(p=>p.g.scale.setScalar(.55+.6*Math.min(1,p.hp/P.hpMax)));
+}
+function kill(p){scene.remove(p.g)}
+
+const S={c:0,r:0,a:0},fx=[];
+function pop(x,z,ic){const e=document.createElement('div');e.className='fx';e.textContent=ic;cv.appendChild(e);fx.push({e,v:new THREE.Vector3(x-W/2+.5,1.3,z-D/2+.5),t:performance.now()})}
+function updFx(now){
+  const w=cv.clientWidth,h=cv.clientHeight;
+  for(let i=fx.length-1;i>=0;i--){
+    const f=fx[i],a=(now-f.t)/1100;
+    if(a>=1){f.e.remove();fx.splice(i,1);continue}
+    const v=f.v.clone();v.y+=a*.6;v.project(cam);
+    f.e.style.left=(v.x+1)/2*w+'px';f.e.style.top=(1-v.y)/2*h+'px';f.e.style.opacity=1-a*a;
+  }
+}
+// ---- Simulación ----
+function act(p){
+  const w=types[p.t].p,s=w[0]+w[1]+w[2];if(s<=0)return 0;
+  let r=Math.random()*s;for(let i=0;i<3;i++){if((r-=w[i])<0)return i}return 2;
+}
+function tick(){
+  tickN++;
+  pawns.forEach(p=>{
+    const o=[[p.x,p.z]];
+    for(let dx=-1;dx<=1;dx++)for(let dz=-1;dz<=1;dz++)if((dx||dz)&&inb(p.x+dx,p.z+dz))o.push([p.x+dx,p.z+dz]);
+    const c=o[rnd(o.length)];p.nx=c[0];p.nz=c[1];p.mv=c[0]!=p.x||c[1]!=p.z;p.fail=false;
+  });
+  let ch=true;
+  while(ch){ch=false;
+    const st=new Map(),mv=new Map();
+    pawns.forEach(p=>{
+      if(!p.mv||p.fail){const k=p.z*W+p.x;st.set(k,(st.get(k)||0)+1)}
+      else{const k=p.nz*W+p.nx;(mv.get(k)||mv.set(k,[]).get(k)).push(p)}
+    });
+    mv.forEach((l,k)=>{
+      const free=2-(st.get(k)||0);
+      if(l.length>free){
+        l.sort(()=>Math.random()-.5).sort((a,b)=>b.hp-a.hp);
+        l.slice(Math.max(free,0)).forEach(p=>{p.fail=true;ch=true});
+      }
+    });
+  }
+  pawns.forEach(p=>{p.arr=p.mv&&!p.fail;if(p.arr){p.x=p.nx;p.z=p.nz}});
+  const cells=new Map(),births=[];
+  pawns.forEach(p=>{const k=p.z*W+p.x;(cells.get(k)||cells.set(k,[]).get(k)).push(p)});
+  cells.forEach(l=>{
+    if(l.length<2||!(l[0].arr||l[1].arr))return;
+    const [a,b]=l,x=act(a),y=act(b);let da=0,db=0;
+    if(x==2&&y==2)da=db=1;
+    else if(x==2)db=1;
+    else if(y==2)da=1;
+    else if(x!=y)return;
+    else if(x==0){a.hp=Math.min(P.hpMax,a.hp+P.gain);b.hp=Math.min(P.hpMax,b.hp+P.gain)}
+    else births.push([a,b]);
+    if((da||db)&&!P.ff&&a.t==b.t)return;
+    const ha=a.hp,hb=b.hp;if(da)a.hp-=hb;if(db)b.hp-=ha;
+    const k=(da||db)?2:x==0?0:1;S['cra'[k]]++;pop(a.x,a.z,['🤝','❤️','⚔️'][k]);
+  });
+  pawns.filter(p=>p.hp<=0).forEach(kill);
+  pawns=pawns.filter(p=>p.hp>0);
+  births.forEach(([a,b])=>{
+    const cnt=new Map();pawns.forEach(p=>{const k=p.z*W+p.x;cnt.set(k,(cnt.get(k)||0)+1)});
+    const o=[];
+    for(let dx=-1;dx<=1;dx++)for(let dz=-1;dz<=1;dz++){const x=a.x+dx,z=a.z+dz;if(inb(x,z)&&(cnt.get(z*W+x)||0)<2)o.push([x,z])}
+    if(!o.length)return;
+    const c=o[rnd(o.length)],par=Math.random()<.5?a:b;
+    const n=mk(par.t,c[0],c[1]);n.g.position.set(a.g.position.x,0,a.g.position.z);
+  });
+  layout();ui();
+}
+
+// ---- Interacción ----
+let drag=null;
+const el=renderer.domElement;
+function hover(e){
+  const r=el.getBoundingClientRect(),v=new THREE.Vector2((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height)*2+1);
+  const rc=new THREE.Raycaster();rc.setFromCamera(v,cam);
+  const h=rc.intersectObjects(pawns.map(p=>p.g),true)[0],tp=$('tip');
+  if(!h){tp.style.display='none';return}
+  const p=h.object.parent.userData.p;
+  tp.textContent=types[p.t].n+' · vida '+(Math.round(p.hp*10)/10)+' / '+P.hpMax;
+  tp.style.left=(e.clientX-r.left+12)+'px';tp.style.top=(e.clientY-r.top+12)+'px';tp.style.display='block';
+}
+el.addEventListener('pointerleave',()=>$('tip').style.display='none');
+el.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,m:0};el.setPointerCapture(e.pointerId)});
+el.addEventListener('pointermove',e=>{
+  if(!drag){hover(e);return}
+  $('tip').style.display='none';const dx=e.clientX-drag.x,dy=e.clientY-drag.y;
+  drag.m+=Math.abs(dx)+Math.abs(dy);drag.x=e.clientX;drag.y=e.clientY;
+  th-=dx*.008;ph=Math.max(.1,Math.min(1.5,ph-dy*.008));setCam();
+});
+el.addEventListener('pointerup',e=>{
+  const d=drag;drag=null;if(!d||d.m>6)return;
+  const r=el.getBoundingClientRect(),v=new THREE.Vector2((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height)*2+1);
+  const rc=new THREE.Raycaster();rc.setFromCamera(v,cam);
+  const h=rc.intersectObject(ground)[0];if(!h)return;
+  const x=Math.floor(h.point.x+W/2),z=Math.floor(h.point.z+D/2);if(!inb(x,z))return;
+  const here=pawns.filter(p=>p.x==x&&p.z==z);
+  if(tool<0){const p=here[here.length-1];if(p){kill(p);pawns=pawns.filter(q=>q!=p)}}
+  else if(here.length<2)mk(tool,x,z);
+  layout();ui();
+});
+el.addEventListener('wheel',e=>{e.preventDefault();rad=Math.max(4,Math.min(90,rad*Math.exp(e.deltaY*.001)));setCam()},{passive:false});
+
+// ---- UI ----
+function drawTypes(){
+  $('types').innerHTML=types.map((t,i)=>`<div class="tp"><button data-sel="${i}" class="${tool==i?'on':''}">●</button><input type="color" data-col="${i}" value="${t.c}"><span>${t.n} · <b id="cnt${i}">0</b></span>
+  <div class="bar" data-bar="${i}"><i style="background:#3fa66b"></i><i style="background:#d65db1"></i><i style="background:#d9534f"></i><b class="h" data-h="${i},0"></b><b class="h" data-h="${i},1"></b></div><div class="vals" id="vl${i}"></div></div>`).join('');
+  $('erase').className=tool<0?'on':'';
+  types.forEach((_,i)=>updateBar(i));
+  ui();
+}
+function updateBar(i){
+  const p=types[i].p,s=$('types').querySelector('[data-bar="'+i+'"]').children;
+  s[0].style.width=p[0]*100+'%';s[1].style.width=p[1]*100+'%';s[2].style.width=p[2]*100+'%';
+  s[3].style.left=p[0]*100+'%';s[4].style.left=(p[0]+p[1])*100+'%';
+  $('vl'+i).textContent='🤝 '+Math.round(p[0]*100)+'% · ❤️ '+Math.round(p[1]*100)+'% · ⚔️ '+Math.round(p[2]*100)+'%';
+}
+$('types').addEventListener('pointerdown',e=>{
+  const h=e.target.closest('.h');if(!h)return;
+  e.preventDefault();h.setPointerCapture(e.pointerId);
+  const[i,j]=h.dataset.h.split(',').map(Number),p=types[i].p,bar=h.parentNode;
+  h.onpointermove=ev=>{
+    const r=bar.getBoundingClientRect(),B=Math.round(Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width))*100);
+    let B1=Math.round(p[0]*100),B2=Math.round((p[0]+p[1])*100);
+    if(j==0)B1=Math.min(B,B2);else B2=Math.max(B,B1);
+    p[0]=B1/100;p[1]=(B2-B1)/100;p[2]=(100-B2)/100;updateBar(i);
+  };
+  h.onpointerup=()=>{h.onpointermove=null};
+});
+function ui(){
+  types.forEach((t,i)=>{const e=$('cnt'+i);if(e)e.textContent=pawns.filter(p=>p.t==i).length});
+  $('hud').innerHTML='<b>Tick '+tickN+'</b> · peones '+pawns.length+'<br>🤝 '+S.c+' &nbsp;❤️ '+S.r+' &nbsp;⚔️ '+S.a+'<br>'+types.map((t,i)=>'<span style="color:'+t.c+'">●</span> '+pawns.filter(p=>p.t==i).length).join(' &nbsp;');
+}
+$('types').addEventListener('click',e=>{const s=e.target.dataset.sel;if(s!=null){tool=+s;drawTypes()}});
+$('types').addEventListener('input',e=>{
+  const d=e.target.dataset;
+  if(d.col!=null){types[d.col].c=e.target.value;types[d.col].mat.color.set(e.target.value)}
+  if(d.p){
+    const[i,j]=d.p.split(',').map(Number),p=types[i].p;
+    const v=Math.min(1,Math.max(0,+e.target.value||0));p[j]=v;
+    const o=[0,1,2].filter(k=>k!=j),s=p[o[0]]+p[o[1]];
+    o.forEach(k=>{p[k]=s>0?p[k]/s*(1-v):(1-v)/2;$('types').querySelector('[data-p="'+i+','+k+'"]').value=p[k].toFixed(2)});
+  }
+});
+$('erase').onclick=()=>{tool=-1;drawTypes()};
+$('play').onclick=()=>{running=!running;$('play').textContent=running?'⏸ Pausa':'▶ Play'};
+$('step').onclick=tick;
+$('ff').onchange=e=>{P.ff=e.target.checked};
+$('clear').onclick=()=>{pawns.forEach(kill);pawns=[];tickN=0;S.c=S.r=S.a=0;ui()};
+$('ms').oninput=e=>$('msv').textContent=e.target.value;$('msv').textContent=500;
+['gain','hp0','hpMax'].forEach(k=>$(k).oninput=e=>{P[k]=Math.max(0,+e.target.value||0);if(k=='hpMax')P[k]=Math.max(1,P[k]);layout()});
+function resizeBoard(){
+  W=Math.max(2,Math.min(40,+$('W').value||12));D=Math.max(2,Math.min(40,+$('D').value||12));
+  $('W').value=W;$('D').value=D;
+  pawns.filter(p=>!inb(p.x,p.z)).forEach(kill);pawns=pawns.filter(p=>inb(p.x,p.z));
+  buildBoard();rad=Math.max(rad,Math.max(W,D)*1.3);setCam();layout(true);ui();
+}
+$('W').onchange=$('D').onchange=resizeBoard;
+$('rand').onclick=()=>{
+  let n=+$('nrand').value||0;
+  for(let i=0;i<n*20&&n>0;i++){
+    const x=rnd(W),z=rnd(D);
+    if(pawns.filter(p=>p.x==x&&p.z==z).length<2){mk(rnd(types.length),x,z);n--}
+  }
+  layout(true);ui();
+};
+function loop(t){
+  requestAnimationFrame(loop);
+  if(running&&t-last>=+$('ms').value){last=t;tick()}
+  const k=Math.min(1,(+$('ms').value<150?.4:.18));
+  pawns.forEach(p=>{p.g.position.x+=(p.tx-p.g.position.x)*k;p.g.position.z+=(p.tz-p.g.position.z)*k});
+  renderer.render(scene,cam);updFx(t);
+}
+buildBoard();setCam();resize();drawTypes();
+for(let i=0;i<24;i++)mk(rnd(4),rnd(W),rnd(D));
+pawns=pawns.filter((p,i,a)=>a.filter(q=>q.x==p.x&&q.z==p.z).indexOf(p)<2||(kill(p),false));
+layout(true);ui();requestAnimationFrame(loop);
+</script></body></html>
